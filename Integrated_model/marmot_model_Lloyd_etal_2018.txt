@@ -1,0 +1,184 @@
+# ---------------------------------------------------------------------------------------
+# Lloyd et al. (2018) Optimizing release strategies: a stepping-stone approach to reintroduction
+#
+# Appendix S2: JAGS code for analysis of captive survival, 
+#              muti-event mark-recpature-recovery model, and
+#              derived probabilities for survival until breeding age   
+# ---------------------------------------------------------------------------------------
+
+
+
+model {
+
+### Captive survival
+#priors
+for(j in 1:nAge){
+ phiCaptive[j]~dunif(0,1)
+}
+#liklihoods
+for(j in 1:nAge){
+ for(k in 1:nYears){
+  n[j,k]~dbinom(phiCaptive[j], N[j,k])
+ }
+}
+
+### multi-event survival model for released individuals
+ for (i in 1:nind){
+  #survival and observations
+  for (t in (first[i]+1):last.occ[i]){
+   #Survival
+   z[i,t] ~ dcat(ps[z[i,t-1], i, t-1,])
+   #Events
+   y[i,t] ~ dcat(po[z[i,t], i, t-1,])
+  }#t
+    
+    
+  #Survival matrix: [State from, ind, time, state to]
+  for (t in first[i]:(last.occ[i]-1)){
+   ps[1,i,t,1] <- phi[i,t]
+   ps[1,i,t,2] <- (1-phi[i,t])*r[i,t]
+   ps[1,i,t,3] <- (1-phi[i,t])*(1-r[i,t])
+   ps[2,i,t,1] <- 0
+   ps[2,i,t,2] <- 0
+   ps[2,i,t,3] <- 1
+   ps[3,i,t,1] <- 0
+   ps[3,i,t,2] <- 0
+   ps[3,i,t,3] <- 1
+    
+   #Observation matrix: [State, ind, time, Obs. type]
+   po[1,i,t,1] <- p[i,t]*F[t]
+   po[1,i,t,2] <- p[i,t]*(1-F[t])
+   po[1,i,t,3] <- 0
+   po[1,i,t,4] <- 1-p[i,t]
+   po[2,i,t,1] <- 0
+   po[2,i,t,2] <- 0
+   po[2,i,t,3] <- 1
+   po[2,i,t,4] <- 0
+   po[3,i,t,1] <- 0 
+   po[3,i,t,2] <- lambda[i,t]
+   po[3,i,t,3] <- 0
+   po[3,i,t,4] <- 1-lambda[i,t]
+
+   #Survival Model (unique to release type, location, and years-ince-release, with additive effects for sex, year, age, and season)    
+   logit(phi[i,t]) <- beta[reltp[i],loc.mat[i,t],yrs.since.release[i,t]]+beta.sex[sex[i]]+ beta.year[year[t]]+ beta.age[age[i,t]] + beta.season[seas[t]] 
+
+   #Detection Model
+   p[i,t]      <- (1/(1+(exp(-(alpha[loc.mat[i,t+1]]+ eps[loc.mat[i,t+1],t])))))*effort.bin[i,t+1]   
+   lambda[i,t] <- (1/(1+(exp(-(gamma[loc.mat[i,t+1]]+ delta[loc.mat[i,t+1],t]))))) *effort.bin[i,t+1] 
+   r[i,t]      <- r.mean[loc.mat[i,t+1]]*effort.bin[i,t+1]*recover.mat[i,t+1]
+  } #t
+ } #i
+
+
+#Observation Process Priors
+for(loc in 1:2){
+ alpha[loc] <- logit(p.int[loc])           #detection probability - p
+ p.int[loc] ~ dunif(0,1)                   #detection probability - p
+ gamma[loc] <- logit(lambda.int[loc])      #probability of detecting a dead individual - lambda
+ lambda.int[loc] ~ dunif(0,1)              #probability of detecting a dead individual - lambda
+}#loc
+
+#Variation among surveys at Strathcona
+ tau.p[2]   <- pow(sigma.p[2],-2)
+ sigma.p[2] ~  dunif(0,10)
+ tau.lam[2]   <- pow(sigma.lam[2],-2)
+ sigma.lam[2] ~  dunif(0,10)
+
+#No variation at Mt. Washington
+ tau.p[1]   <- 0
+ sigma.p[1] <- 0
+ tau.lam[1]   <- 0
+ sigma.lam[1] <- 0
+
+for(t in 1:(nOcc-1)){
+ eps[1,t]<-0                      
+ eps[2,t] ~ dnorm(0,tau.p[2]) 
+ delta[1,t] <-0                   
+ delta[2,t] ~ dnorm(0,tau.lam[2])
+}
+
+r.mean[1]~dunif(0,1)                   #Mt Washington recovery probability
+r.mean[2]<-0                           #Strathcona recovery probability
+
+
+for (t in 1:(nOcc-1)){
+ F[t] <- F.seas[seas[(t+1)]]               #probability of fast detection given detected
+}
+F.seas[1] ~ dunif(0,1)                     #given detected alive in spring, signal could be fast (F.seas[1]) or slow (1-F.seas[1])
+F.seas[2] <- 1                             #given detected alive in summer, probability signal was fast 
+F.seas[3] ~ dunif(0,1)                     #given detected alive in fall, signal could be fast (F.seas[3]) or slow (1-F.seas[3])
+F.seas[4] <- 0                             #no winter surveys 
+
+# Additive survival priors
+#Year effect
+ for(t in 1:(nyrs-1)){
+  beta.year[t]~dnorm(0,0.01)
+ }
+ beta.year[nyrs]<- -1*(sum(beta.year[1:(nyrs-1)]))
+
+#Age effect
+ for(k in 1:(maxAge-1)){
+  beta.age[k]~dnorm(0,0.01)
+ }
+ beta.age[maxAge]<- -1*(sum(beta.age[1:(maxAge-1)]))
+
+#Season effect
+ for(k in 1:3){
+  beta.season[k]~dnorm(0,0.01)
+ }
+ beta.season[4]<- -1*(sum(beta.season[1:3]))
+
+#Sex effect
+ beta.sex[1]~dnorm(0,0.01)
+ beta.sex[2]<- -1*(beta.sex[1])
+
+#Priors - survival intercepts
+#Release type 1 (CW) and 3 (WW)
+for(a in c(1,3)){                           #release type (CW=1, WW=3)
+ for(l in 2){                               #location (ST=2, all CW and WW individuals released at ST)
+  for(r in 1:3){                            #years since first release
+   beta[a,l,r] <- logit(phiInt[a,l,r]) 
+   phiInt[a,l,r] ~ dunif(0,1) 
+   phiIntAnnual[a,l,r]<-phiInt[a,l,r]^12   #derived annual survival
+  }
+ }
+}
+
+#Release type 2 (SS)
+for(a in 2){
+ for(l in 1){                              #location (MW=1, all SS individuals released at MW in year 1)
+  for(r in 1){                             #years since first release: only 1 year at MW
+   beta[a,l,r] <- logit(phiInt[a,l,r]) 
+   phiInt[a,l,r] ~ dunif(0,1) 
+   phiIntAnnual[a,l,r]<-phiInt[a,l,r]^12   #derived annual survival
+  }
+ }
+
+ for(l in 2){                              #location (moved to ST in year 2)
+  for(r in 2:3){                           #years since first release
+   beta[a,l,r] <- logit(phiInt[a,l,r]) 
+   phiInt[a,l,r] ~ dunif(0,1) 
+   phiIntAnnual[a,l,r]<-phiInt[a,l,r]^12  #derived annual survival
+  }
+ }
+}
+
+# Probability an individual alive Mt Washington in June was relocated
+for(i in MWmonitor){
+ AliveAtMove[i]<-ifelse(z[i,MWIndMoveDate[i]]==1,1,0)
+}
+psi<-nMWIndMoved/sum(AliveAtMove[MWmonitor])
+
+
+### Derive probability of surviving to breeding age at ST for various release stategies
+PBA[1]<-ilogit(beta[2,1,1]+beta.age[1])^12*psi*(ilogit(beta[2,2,2]+beta.age[2]) ^12)*(ilogit(beta[2,2,3]+beta.age[3]) ^12)                             ##SS released as year-1
+PBA[2]<-ilogit(beta[1,2,1]+beta.age[1])^12*(ilogit(beta[1,2,2]+beta.age[2]) ^12)*(ilogit(beta[1,2,3]+beta.age[3]) ^12)                                 ##CW released as year-1
+PBA[3]<-phiCaptive[1]*ilogit(beta[2,1,1]+beta.age[2])^12*psi*(ilogit(beta[2,2,2]+beta.age[3]) ^12)*(ilogit(beta[2,2,3]+beta.age[3]) ^12)               ##SS released as year-2
+PBA[4]<-phiCaptive[1]*ilogit(beta[1,2,1]+beta.age[2])^12*(ilogit(beta[1,2,2]+beta.age[3]) ^12)                                                         ##CW released as year-2
+PBA[5]<-phiCaptive[1]*phiCaptive[2]*ilogit(beta[2,1,1]+beta.age[3])^12*psi*(ilogit(beta[2,2,2]+beta.age[3]) ^12)*(ilogit(beta[2,2,3]+beta.age[3]) ^12) ##SS released as year-3
+PBA[6]<-phiCaptive[1]*phiCaptive[2]*ilogit(beta[1,2,1]+beta.age[3])^12*(ilogit(beta[1,2,2]+beta.age[3]) ^12)                                           ##CW released as year-3
+PBA[7]<-phiCaptive[1]*phiCaptive[2]*phiCaptive[3]*ilogit(beta[2,1,1]+beta.age[3])^12*psi*(ilogit(beta[2,2,2]+beta.age[3]) ^12)*(ilogit(beta[2,2,3]+beta.age[3]) ^12) ##SS released as year-4
+PBA[8]<-phiCaptive[1]*phiCaptive[2]*phiCaptive[3]*ilogit(beta[1,2,1]+beta.age[3])^12*(ilogit(beta[1,2,2]+beta.age[3]) ^12)                             ##CW released as year-4
+
+}#model
+
